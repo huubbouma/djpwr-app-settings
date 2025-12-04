@@ -2,6 +2,10 @@ import logging
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import ProgrammingError
+from django.core.files.storage import default_storage
+from django.core.files.base import File
+from django.db.models.fields.files import FieldFile
+
 from djpwr.managers import get_manager
 
 default_app_config = 'djpwr.app_settings.apps.AppConfig'
@@ -40,9 +44,65 @@ class AppSettingDict:
             group__group_name='.'.join([app_label, model_name]),
             name=setting_name
         )
-        setting.value = value
-        setting.save()
 
+        # Keep track of the old stored file (if any)
+        old_value = setting.value
+        old_name = ""
+        if isinstance(old_value, (File, FieldFile)):
+            old_name = old_value.name or ""
+
+        # Case 1: user cleared the field (None / "" / False)
+        if not value:
+            if old_name:
+                try:
+                    # old_name may be a bare filename or a full path
+                    if "/" in old_name:
+                        storage_path = old_name
+                    else:
+                        storage_path = (
+                            f"app_settings/{app_label}/{model_name}/{setting_name}/{old_name}"
+                        )
+                    default_storage.delete(storage_path)
+                except Exception:
+                    # Do not break settings saving if delete fails
+                    pass
+
+            setting.value = value
+
+        else:
+            # Case 2: new upload (InMemoryUploadedFile / TemporaryUploadedFile etc.)
+            # File-like, but not FieldFile (which would be an existing stored file)
+            if isinstance(value, File) and not isinstance(value, FieldFile):
+                # Remove old file if there was one
+                if old_name:
+                    try:
+                        if "/" in old_name:
+                            old_storage_path = old_name
+                        else:
+                            old_storage_path = (
+                                f"app_settings/{app_label}/{model_name}/{setting_name}/{old_name}"
+                            )
+                        default_storage.delete(old_storage_path)
+                    except Exception:
+                        # Ignore delete errors; saving the new file is more important
+                        pass
+
+                # Save the new file
+                filename = (value.name or "").rsplit("/", 1)[-1]
+                storage_path = (
+                    f"app_settings/{app_label}/{model_name}/{setting_name}/{filename}"
+                )
+                saved_path = default_storage.save(storage_path, value)
+                # Point the object to the stored path so .open() will work later
+                value.name = saved_path
+                setting.value = value
+
+            else:
+                # Case 3: non-file or existing FieldFile \u2192 just store as-is
+                # (PickledObjectField will handle pickling)
+                setting.value = value
+
+        setting.save()
         get_manager('app_settings.SettingGroup').touch_last_modified(setting.group)
 
     def get(self, setting_label, default=None):
@@ -56,7 +116,7 @@ class AppSettingDict:
 
     def __contains__(self, setting_label):
         """
-        Provide `in` checks: 'appname.interal.somekey' in app_settings
+        Provide `in` checks: 'appname.internal.somekey' in app_settings
         """
         try:
             self[setting_label]
