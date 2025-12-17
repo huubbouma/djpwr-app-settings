@@ -6,7 +6,8 @@ from django.contrib.admin.options import IS_POPUP_VAR
 from django.contrib.admin.utils import flatten_fieldsets
 from django.contrib.auth.admin import csrf_protect_m
 from django.core.exceptions import PermissionDenied
-from django.db import transaction, router
+from django.db import router, transaction
+from django.db.models.fields.files import FileField
 from django.forms import all_valid
 
 try:
@@ -16,7 +17,7 @@ except:
 
 from djpwr.managers import get_manager
 
-from . import models, APP_SETTINGS
+from . import APP_SETTINGS, models
 
 
 class ApplicationSettingAdmin(admin.ModelAdmin):
@@ -27,7 +28,7 @@ admin.site.register(models.ApplicationSetting, ApplicationSettingAdmin)
 
 
 class SettingGroupAdmin(admin.ModelAdmin):
-    readonly_fields = ['last_modified']
+    readonly_fields = ["last_modified"]
     exclude = ["group_name"]
 
     def get_urls(self):
@@ -78,16 +79,22 @@ class SettingGroupAdmin(admin.ModelAdmin):
                 raise PermissionDenied
 
         add = False
-
         ModelForm = self.get_form(request, obj, change=not add)
 
         if request.method == "POST":
+            # 1) hydrate obj from stored settings, so FileField has its old value
+            initial_settings = self.get_changeform_initial_data(request)
+            for field_name, value in initial_settings.items():
+                if hasattr(obj, field_name):
+                    setattr(obj, field_name, value)
+
             form = ModelForm(request.POST, request.FILES, instance=obj)
             form_validated = form.is_valid()
             if form_validated:
                 new_object = self.save_form(request, form, change=not add)
             else:
                 new_object = form.instance
+
             formsets, inline_instances = self._create_formsets(
                 request, new_object, change=not add
             )
@@ -106,11 +113,21 @@ class SettingGroupAdmin(admin.ModelAdmin):
             else:
                 form_validated = False
         else:
+            # GET
             initial = self.get_changeform_initial_data(request)
             initial["last_modified"] = obj.last_modified
-            form = ModelForm(initial=initial)
+
+            # hydrate the instance as well (including FileField)
+            for field_name, value in list(initial.items()):  # make a copy
+                if hasattr(obj, field_name):
+                    field = obj._meta.get_field(field_name)
+                    setattr(obj, field_name, value)
+                    if isinstance(field, FileField):
+                        initial.pop(field_name, None)
+
+            form = ModelForm(instance=obj, initial=initial)
             formsets, inline_instances = self._create_formsets(
-                request, form.instance, change=False
+                request, form.instance, change=not add
             )
 
         if not add and not self.has_change_permission(request, obj):
@@ -121,9 +138,11 @@ class SettingGroupAdmin(admin.ModelAdmin):
             form,
             list(self.get_fieldsets(request, obj)),
             # Clear prepopulated fields on a view-only form to avoid a crash.
-            self.get_prepopulated_fields(request, obj)
-            if add or self.has_change_permission(request, obj)
-            else {},
+            (
+                self.get_prepopulated_fields(request, obj)
+                if add or self.has_change_permission(request, obj)
+                else {}
+            ),
             readonly_fields,
             model_admin=self,
         )
@@ -186,6 +205,19 @@ class SettingGroupAdmin(admin.ModelAdmin):
         for field_name, value in form.cleaned_data.items():
             if field_name in obj._internal_fields:
                 continue
+
+            field = obj._meta.get_field(field_name)
+
+            if isinstance(field, FileField):
+                # Handle FileField semantics:
+                # - value is False -> clear
+                # - value is None / "" -> keep existing
+                if value is False:
+                    APP_SETTINGS[".".join([group_name, field_name])] = None
+                    continue
+                if not value:
+                    # keep old value in APP_SETTINGS, do not overwrite
+                    continue
 
             APP_SETTINGS[".".join([group_name, field_name])] = value
 
