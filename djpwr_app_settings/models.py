@@ -44,13 +44,14 @@ class SettingGroup(models.Model, metaclass=SettingGroupBase):
         return '{}.{}'.format(cls._meta.app_label, cls._meta.model_name)
 
     def __str__(self):
-
-        model = get_model(self.group_name)
-
-        return _("{model_name} for {app_label}").format(
-            app_label=apps.get_app_config(model._meta.app_label).verbose_name,
-            model_name=model._meta.verbose_name_plural,
-        )
+        try:
+            model = get_model(self.group_name)
+            return _("{model_name} for {app_label}").format(
+                app_label=apps.get_app_config(model._meta.app_label).verbose_name,
+                model_name=model._meta.verbose_name_plural,
+            )
+        except LookupError:
+            return self.group_name
 
 
 class ApplicationSetting(models.Model):
