@@ -1,6 +1,7 @@
 from functools import update_wrapper
 
 from django.contrib import admin
+from django.utils.html import format_html
 from django.contrib.admin import helpers
 from django.contrib.admin.options import IS_POPUP_VAR
 from django.contrib.admin.utils import flatten_fieldsets
@@ -21,7 +22,17 @@ from . import APP_SETTINGS, models
 
 
 class ApplicationSettingAdmin(admin.ModelAdmin):
-    list_display = ["group_name", "name"]
+    list_display = ["group_name", "name", "value_display"]
+    raw_id_fields = ["group"]
+
+    @admin.display(description="value")
+    def value_display(self, obj):
+        if obj.value is None:
+            return "-"
+        value = str(obj.value)
+        if len(value) > 64:
+            return format_html('<span title="{}">{}&hellip;</span>', value, value[:64])
+        return value
 
 
 admin.site.register(models.ApplicationSetting, ApplicationSettingAdmin)
@@ -61,9 +72,10 @@ class SettingGroupAdmin(admin.ModelAdmin):
         model = self.model
         opts = model._meta
 
-        setting_group = get_manager("app_settings.SettingGroup").get(
-            group_name=model.name_from_class()
+        setting_group = get_manager("app_settings.SettingGroup").create_group(
+            model.name_from_class()
         )
+        get_manager("app_settings.ApplicationSetting").create_for_group(setting_group)
 
         obj = model(
             pk=setting_group.pk,
