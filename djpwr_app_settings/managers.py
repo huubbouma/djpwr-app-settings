@@ -1,6 +1,5 @@
-import datetime
-
 from django.db.models import NOT_PROVIDED
+from django.utils import timezone
 
 from djpwr.managers import get_manager, get_model, QuerySet, from_queryset
 
@@ -16,7 +15,7 @@ class SettingGroupManager(from_queryset(SettingGroupQuerySet)):
         return setting_group
 
     def touch_last_modified(self, setting):
-        now = datetime.datetime.now()
+        now = timezone.now()
 
         self.filter(
             id=setting.id,
