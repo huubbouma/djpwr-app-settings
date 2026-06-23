@@ -79,5 +79,6 @@ class ApplicationSetting(models.Model):
 
 class SettingGroupMeta:
     managed = False
+    default_related_name = '+'  # disable reverse accessor, avoids cross-app clashes
     verbose_name = _("Settings")
     verbose_name_plural = _("Settings")
